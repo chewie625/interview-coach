@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interview Coach</title>
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+<div class="shell">
+  <h1>🎤 Interview Coach</h1>
+  <div class="subtitle">Practice situational interview questions with AI feedback</div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="setup">Setup</div>
+    <div class="tab" data-tab="practice">Practice</div>
+    <div class="tab" data-tab="results">Results</div>
+  </div>
+
+  <!-- SETUP -->
+  <div class="panel active" id="panel-setup">
+    <div class="row2">
+      <div>
+        <label>Job description</label>
+        <textarea id="jd" placeholder="Paste the job description here..."></textarea>
+      </div>
+      <div>
+        <label>CV <span style="font-weight:400;color:#aaa">(optional)</span></label>
+        <div class="upload-zone" id="upload-zone" onclick="document.getElementById('cv-file').click()">
+          <div style="font-size:24px">📄</div>
+          <div id="upload-label">Click to upload your CV</div>
+          <div style="font-size:11px;color:#bbb">PDF, DOCX or TXT</div>
+        </div>
+        <input type="file" id="cv-file" accept=".pdf,.txt,.doc,.docx" style="display:none">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>OpenRouter API key</label>
+      <div style="display:flex;gap:8px">
+        <input type="password" id="api-key" placeholder="sk-or-...  (from openrouter.ai/keys)">
+        <button class="btn btn-sm" onclick="toggleKey()">👁</button>
+      </div>
+      <div class="hint" style="margin-top:4px">Free key from <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a> — no credit card needed</div>
+    </div>
+
+    <div class="field">
+      <label>Model <span id="model-load-status" style="font-weight:400;color:#aaa;text-transform:none;letter-spacing:0">— loading free models…</span></label>
+      <select id="model"><option value="">Loading…</option></select>
+      <div class="hint" style="margin-top:4px">Free models loaded live from OpenRouter. If one fails, pick another.</div>
+    </div>
+
+    <div class="btns" style="margin-top:0">
+      <button class="btn btn-primary" id="gen-btn" onclick="generate()">✦ Generate questions</button>
+      <span id="gen-msg" style="font-size:13px;color:#666"></span>
+    </div>
+  </div>
+
+  <!-- PRACTICE -->
+  <div class="panel" id="panel-practice">
+    <div id="practice-area">
+      <div style="text-align:center;padding:3rem;color:#aaa">Generate questions in Setup to begin.</div>
+    </div>
+  </div>
+
+  <!-- RESULTS -->
+  <div class="panel" id="panel-results">
+    <div id="results-area">
+      <div style="text-align:center;padding:3rem;color:#aaa">Complete some questions to see results.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+let questions = [], responses = [], currentQ = 0, cvText = '', recording = false, recog = null;
+
+// Tabs
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === t.dataset.tab));
+  document.querySelectorAll('.panel').forEach(x => x.classList.toggle('active', x.id === 'panel-' + t.dataset.tab));
+  if (t.dataset.tab === 'results') renderResults();
+}));
+function goTab(n) {
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === n));
+  document.querySelectorAll('.panel').forEach(x => x.classList.toggle('active', x.id === 'panel-' + n));
+  if (n === 'results') renderResults();
+}
+
+// CV upload
+document.getElementById('cv-file').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  document.getElementById('upload-zone').classList.add('ok');
+  document.getElementById('upload-label').textContent = f.name + ' — reading…';
+
+  if (f.name.toLowerCase().endsWith('.pdf')) {
+    try {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      const arrayBuffer = await f.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      let text = '';
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        text += content.items.map(item => item.str).join(' ') + '\n';
+      }
+      cvText = text.trim();
+      document.getElementById('upload-label').textContent = f.name + ' ✓';
+    } catch(err) {
+      cvText = '';
+      document.getElementById('upload-label').textContent = f.name + ' ⚠ Could not read PDF — try saving as TXT';
+      document.getElementById('upload-zone').classList.remove('ok');
+    }
+  } else {
+    const r = new FileReader();
+    r.onload = ev => { cvText = ev.target.result; document.getElementById('upload-label').textContent = f.name + ' ✓'; };
+    r.readAsText(f);
+  }
+});
+
+// Load free models live from OpenRouter
+async function loadFreeModels() {
+  const sel = document.getElementById('model');
+  const status = document.getElementById('model-load-status');
+  try {
+    const key = document.getElementById('api-key').value.trim();
+    const headers = key ? { 'Authorization': 'Bearer ' + key } : {};
+    const res = await fetch('https://openrouter.ai/api/v1/models?supported_parameters=temperature&order=most-popular', { headers });
+    const data = await res.json();
+    // Filter: prompt cost = "0", text output, not a router/audio/image-only model
+    const free = data.data.filter(m =>
+      m.pricing.prompt === '0' &&
+      m.pricing.completion === '0' &&
+      m.architecture.output_modalities.includes('text') &&
+      m.architecture.input_modalities.includes('text') &&
+      !m.id.includes('lyria') &&
+      !m.id.includes('rerank') &&
+      !m.id.includes('safety')
+    );
+    sel.innerHTML = free.map(m =>
+      `<option value="${m.id}">${m.name}</option>`
+    ).join('');
+    // Prefer llama-3.3 if available
+    const preferred = [...sel.options].find(o => o.value.includes('llama-3.3-70b'));
+    if (preferred) sel.value = preferred.value;
+    status.textContent = `— ${free.length} free models available`;
+  } catch(e) {
+    // Fallback to a minimal hardcoded list if fetch fails
+    sel.innerHTML = `
+      <option value="meta-llama/llama-3.3-70b-instruct:free">Llama 3.3 70B Instruct (free)</option>
+      <option value="deepseek/deepseek-v4-flash:free">DeepSeek V4 Flash (free)</option>
+      <option value="google/gemma-4-31b-it:free">Google Gemma 4 31B (free)</option>`;
+    status.textContent = '— could not load live list';
+  }
+}
+loadFreeModels();
+
+// Save key to localStorage when entered, and reload models
+document.getElementById('api-key').addEventListener('change', function() {
+  if (this.value.trim()) localStorage.setItem('or_api_key', this.value.trim());
+  loadFreeModels();
+});
+// Auto-load saved key on startup
+const savedKey = localStorage.getItem('or_api_key');
+if (savedKey) { document.getElementById('api-key').value = savedKey; }
+
+// Toggle API key visibility
+function toggleKey() {
+  const i = document.getElementById('api-key');
+  i.type = i.type === 'password' ? 'text' : 'password';
+}
+
+// OpenRouter call
+async function callAI(prompt, maxTokens) {
+  const key = document.getElementById('api-key').value.trim();
+  if (!key) throw new Error('Please enter your OpenRouter API key first');
+  const model = document.getElementById('model').value;
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + key,
+      'HTTP-Referer': window.location.href,
+      'X-Title': 'Interview Coach'
+    },
+    body: JSON.stringify({ model, max_tokens: maxTokens, temperature: 0.7, messages: [{ role: 'user', content: prompt }] })
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) throw new Error(data.error?.message || 'API error ' + res.status);
+  const text = data.choices?.[0]?.message?.content;
+  if (!text) throw new Error('Empty response from model');
+  return text;
+}
+
+// Extract JSON from messy text
+function getJson(text) {
+  const s = text.replace(/```json|```/gi, '').trim();
+  function bal(str, o, c) {
+    const i = str.indexOf(o); if (i < 0) return null;
+    let d = 0;
+    for (let j = i; j < str.length; j++) {
+      if (str[j] === o) d++; else if (str[j] === c && --d === 0) return str.slice(i, j + 1);
+    }
+    return null;
+  }
+  return bal(s, '[', ']') || bal(s, '{', '}') || s;
+}
+
+// Generate questions
+async function generate() {
+  const btn = document.getElementById('gen-btn'), msg = document.getElementById('gen-msg');
+  btn.disabled = true;
+  msg.innerHTML = '<span class="spin"><span>●</span><span>●</span><span>●</span></span> Generating…';
+  const jd = document.getElementById('jd').value.trim();
+  const prompt = `Generate exactly 7 situational interview questions. Return ONLY a JSON array, no other text.
+Format: [{"q":"Tell us about a situation where...","tag":"Competency"}]
+- Every q must start with: "Tell us about a situation where", "Describe a situation where", "Share an example of a time when", "Give us an example of when", or "Tell us about a time when"
+- tag is a short competency label
+- Cover varied competencies tailored to the job description below
+${jd ? '\nJob description:\n' + jd.slice(0, 2000) : ''}
+${cvText ? '\nApplicant CV:\n' + cvText.slice(0, 800) : ''}
+Output the JSON array now:`;
+  try {
+    const text = await callAI(prompt, 1200);
+    const parsed = JSON.parse(getJson(text));
+    const arr = Array.isArray(parsed) ? parsed : Object.values(parsed).find(v => Array.isArray(v));
+    if (!arr || !arr.length) throw new Error('No questions found in response');
+    questions = arr.filter(i => i && (i.q || i.question)).map(i => ({ q: i.q || i.question, tag: i.tag || i.competency || 'General' }));
+    responses = questions.map(() => ({ text: '', rating: null, star: null, feedback: '', example: null }));
+    currentQ = 0;
+    renderPractice();
+    goTab('practice');
+    msg.textContent = questions.length + ' questions ready.';
+  } catch(e) {
+    msg.innerHTML = '<span class="err">⚠ ' + e.message + '</span>';
+  }
+  btn.disabled = false;
+}
+
+// Render practice
+function renderPractice() {
+  if (!questions.length) return;
+  const q = questions[currentQ], r = responses[currentQ];
+  const hasAnswer = r.text.trim().length > 30, analysed = r.rating !== null;
+  const dots = questions.map((_, i) => `<div class="dot${i===currentQ?' active':responses[i].rating!==null?' done':''}" onclick="goQ(${i})"></div>`).join('');
+  const micPath = recording ? 'M6 6l12 12M18 6L6 18' : 'M12 2a3 3 0 0 0-3 3v4a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3zM19 10a7 7 0 0 1-14 0M12 17v5M8 22h8';
+  let btns = '';
+  if (!analysed && hasAnswer) btns += `<button class="btn btn-primary" id="abtn" onclick="analyse()">✦ Analyse my answer</button>`;
+  if (analysed && currentQ < questions.length - 1) btns += `<button class="btn btn-primary" onclick="goQ(${currentQ+1})">Next →</button>`;
+  if (analysed && currentQ === questions.length - 1) btns += `<button class="btn btn-primary" onclick="goTab('results')">View results →</button>`;
+  if (r.text) btns += `<button class="btn btn-red btn-sm" onclick="clearQ()">↺ Re-record</button>`;
+  if (!hasAnswer && !analysed) btns += `<span class="hint">Speak or type a few sentences to enable analysis.</span>`;
+  const ex = r.example;
+  const exHtml = ex ? `
+    <div style="margin-top:10px;padding-top:10px;border-top:1px solid #eee;">
+      <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#888;margin-bottom:8px;">Example answer using your background</div>
+      <div style="display:grid;gap:6px;font-size:13px;line-height:1.6;">
+        <div><span style="display:inline-block;width:72px;font-weight:600;color:#555">Situation</span>${esc(ex.situation)}</div>
+        <div><span style="display:inline-block;width:72px;font-weight:600;color:#555">Task</span>${esc(ex.task)}</div>
+        <div><span style="display:inline-block;width:72px;font-weight:600;color:#555">Action</span>${esc(ex.action)}</div>
+        <div><span style="display:inline-block;width:72px;font-weight:600;color:#555">Result</span>${esc(ex.result)}</div>
+      </div>
+    </div>` : '';
+  const st = r.star;
+  const starHtml = st ? `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+      ${['situation','task','action','result'].map(k => `
+        <div style="background:#f5f5f3;border-radius:6px;padding:8px 10px;">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#888;margin-bottom:3px;">${k}</div>
+          <div style="font-size:18px;letter-spacing:1px;">${[1,2,3,4,5].map(s=>`<span style="color:${s<=st[k]?'#f5a623':'#ddd'}">★</span>`).join('')}</div>
+        </div>`).join('')}
+    </div>` : '';
+  const fbHtml = analysed ? `<div class="fb">${starHtml}<div class="fb-text">${esc(r.feedback)}</div>${exHtml}</div>` : '';
+  document.getElementById('practice-area').innerHTML = `
+    <div class="nav"><span style="font-size:13px;color:#888">Question ${currentQ+1} of ${questions.length}</span><div class="dots">${dots}</div></div>
+    <div class="q-card"><span class="tag">${esc(q.tag)}</span><p class="q-text">${esc(q.q)}</p><div class="tip">💡 <strong>STAR:</strong> Situation → Task → Action → Result</div></div>
+    <label style="margin-bottom:6px">Your answer</label>
+    <div class="rec-row">
+      <button class="mic${recording?' on':''}" id="mic" onclick="toggleRec()"><svg viewBox="0 0 24 24"><path d="${micPath}"/></svg></button>
+      <div style="flex:1">
+        <textarea id="ans" style="min-height:80px" placeholder="Speak or type your answer here…" oninput="responses[currentQ].text=this.value;syncBtn()" ${analysed?'readonly':''}>${esc(r.text)}</textarea>
+        <div class="status"><div class="sdot${recording?' on':''}"></div><span>${recording?'Recording…':'Press mic or type'}</span></div>
+      </div>
+    </div>
+    ${fbHtml}
+    <div class="btns" id="brow">${btns}<span id="amsg"></span></div>`;
+}
+
+function syncBtn() {
+  const has = responses[currentQ].text.trim().length > 30, analysed = responses[currentQ].rating !== null;
+  const row = document.getElementById('brow'); if (!row) return;
+  const ex = document.getElementById('abtn');
+  if (has && !analysed && !ex) { const b = document.createElement('button'); b.className='btn btn-primary'; b.id='abtn'; b.textContent='✦ Analyse my answer'; b.onclick=analyse; row.insertBefore(b, row.firstChild); }
+  else if (!has && ex) ex.remove();
+}
+
+function goQ(i) { if (recording) stopRec(); currentQ = i; renderPractice(); }
+function clearQ() { if (recording) stopRec(); responses[currentQ] = {text:'',rating:null,feedback:''}; renderPractice(); }
+
+// Speech
+function toggleRec() { recording ? stopRec() : startRec(); }
+function startRec() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { alert('Speech not supported. Use Chrome or type your answer.'); return; }
+  // Snapshot the textarea at the moment mic is pressed — this is the base text
+  const el = document.getElementById('ans');
+  const baseText = el ? el.value : '';
+  responses[currentQ].text = baseText;
+
+  recog = new SR(); recog.continuous = true; recog.interimResults = true; recog.lang = 'en-AU';
+
+  // Track only NEW speech from this session
+  let sessionFinal = '';
+
+  recog.onresult = e => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) sessionFinal += e.results[i][0].transcript + ' ';
+      else interim = e.results[i][0].transcript;
+    }
+    const combined = baseText + sessionFinal + interim;
+    const el = document.getElementById('ans'); if (el) el.value = combined;
+    responses[currentQ].text = combined; syncBtn();
+  };
+  recog.onerror = e => { if (e.error==='not-allowed') alert('Microphone access denied.'); stopRec(); };
+  recog.onend = () => { if (recording) recog.start(); };
+  recog.start(); recording = true;
+  const micBtn = document.getElementById('mic');
+  if (micBtn) { micBtn.classList.add('on'); micBtn.querySelector('path').setAttribute('d','M6 6l12 12M18 6L6 18'); }
+  const sdot = document.querySelector('.sdot');
+  if (sdot) { sdot.classList.add('on'); sdot.nextElementSibling.textContent = 'Recording…'; }
+}
+function stopRec() { recording = false; if (recog) { recog.onend=null; recog.stop(); recog=null; } renderPractice(); }
+
+// Analyse
+async function analyse() {
+  if (recording) stopRec();
+  const q = questions[currentQ], ans = responses[currentQ].text.trim(); if (!ans) return;
+  const msg = document.getElementById('amsg'), btn = document.getElementById('abtn');
+  msg.innerHTML = '<span class="spin"><span>●</span><span>●</span><span>●</span></span> Analysing…';
+  if (btn) btn.disabled = true;
+  const jd = document.getElementById('jd').value.trim();
+  const cv = document.getElementById('cv-file')._cvText || cvText || '';
+  const prompt = `You are an interview coach. Evaluate this answer and provide a sample answer.
+Question: ${q.q}
+Competency: ${q.tag}
+${jd ? 'Role context: ' + jd.slice(0,400) : ''}
+${cv ? 'Candidate CV: ' + cv.slice(0,800) : ''}
+Answer: "${ans}"
+
+Score each STAR component from 1 (missing/very poor) to 5 (excellent). Be strict and give different scores for each — do NOT give the same score to all four unless truly justified.
+- situation_score: Did they clearly describe the context and background?
+- task_score: Did they explain their specific responsibility or challenge?
+- action_score: Did they describe the concrete steps THEY personally took?
+- result_score: Did they share a specific measurable outcome?
+
+Return ONLY valid JSON:
+{
+  "situation_score": <integer 1-5>,
+  "task_score": <integer 1-5>,
+  "action_score": <integer 1-5>,
+  "result_score": <integer 1-5>,
+  "feedback": "<2-3 sentences of specific coaching identifying the weakest components and how to improve>",
+  "example": {
+    "situation": "<1-2 sentences from candidate CV background if available>",
+    "task": "<1 sentence>",
+    "action": "<2-3 sentences of specific steps in plain English>",
+    "result": "<1-2 sentences with a concrete measure>"
+  }
+}`;
+  try {
+    const text = await callAI(prompt, 1000);
+    const p = JSON.parse(getJson(text));
+    const clamp = v => Math.min(5, Math.max(1, Math.round(v)));
+    responses[currentQ].star = {
+      situation: clamp(p.situation_score || p.star?.situation || 1),
+      task:      clamp(p.task_score      || p.star?.task      || 1),
+      action:    clamp(p.action_score    || p.star?.action    || 1),
+      result:    clamp(p.result_score    || p.star?.result    || 1)
+    };
+    // overall = average of 4 components (used for results tab)
+    const vals = Object.values(responses[currentQ].star);
+    responses[currentQ].rating = Math.round(vals.reduce((a,b)=>a+b,0) / vals.length);
+    responses[currentQ].feedback = p.feedback;
+    responses[currentQ].example = p.example || null;
+    renderPractice();
+  } catch(e) {
+    msg.innerHTML = '<span class="err">⚠ ' + e.message + '</span>';
+    if (btn) btn.disabled = false;
+  }
+}
+
+// Results
+function renderResults() {
+  const done = responses.filter(r => r.rating !== null); if (!done.length) return;
+  const avg = done.reduce((s,r) => s+r.rating, 0) / done.length;
+  const st = n => [1,2,3,4,5].map(s => `<span style="color:${s<=n?'#f5a623':'#ddd'}">★</span>`).join('');
+  const rows = questions.map((q,i) => {
+    const r = responses[i]; if (!r.rating) return '';
+    return `<div class="rrow"><div style="display:flex;justify-content:space-between;gap:10px;margin-bottom:6px"><div><span class="tag">${esc(q.tag)}</span><p style="font-size:14px;font-weight:500;margin-top:5px;line-height:1.45">${esc(q.q)}</p></div><div style="font-size:18px;white-space:nowrap">${st(r.rating)}</div></div><p style="font-size:13px;color:#555;border-top:1px solid #eee;padding-top:8px;line-height:1.6">${esc(r.feedback)}</p></div>`;
+  }).join('');
+  document.getElementById('results-area').innerHTML = `
+    <div class="hero"><div class="stars">${st(Math.round(avg))}</div><div style="font-size:13px;color:#888;margin-top:4px">${avg.toFixed(1)} / 5 &nbsp;·&nbsp; ${done.length} of ${questions.length} answered</div></div>
+    <div class="sgrid">
+      <div class="stile"><div class="n">${avg.toFixed(1)}</div><div class="l">avg score</div></div>
+      <div class="stile"><div class="n">${done.length}</div><div class="l">answered</div></div>
+      <div class="stile"><div class="n">${done.filter(r=>r.rating>=4).length}</div><div class="l">strong (4-5★)</div></div>
+      <div class="stile"><div class="n">${done.filter(r=>r.rating<=2).length}</div><div class="l">need work</div></div>
+    </div>
+    ${rows}
+    <div class="btns"><button class="btn" onclick="goQ(0);goTab('practice')">↺ Practice again</button></div>`;
+}
+
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+</script>
+</body>
+</html>
