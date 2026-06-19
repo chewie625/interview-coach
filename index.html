@@ -348,11 +348,11 @@ ${jd ? 'Role context: ' + jd.slice(0,400) : ''}
 ${cv ? 'Candidate CV: ' + cv.slice(0,800) : ''}
 Answer: "${ans}"
 
-Score each STAR component from 1 (missing/very poor) to 5 (excellent). Be strict and give different scores for each — do NOT give the same score to all four unless truly justified.
+Act as a career coach, score each STAR component from 1 (missing/very poor) to 5 (excellent). Be strict and give different scores for each — do NOT give the same score to all four unless truly justified.
 - situation_score: Did they clearly describe the context and background?
-- task_score: Did they explain their specific responsibility or challenge?
-- action_score: Did they describe the concrete steps THEY personally took?
-- result_score: Did they share a specific measurable outcome?
+- task_score: Did they clearly explain their specific responsibility or challenge?
+- action_score: Did they clearly describe the concrete steps THEY personally took?
+- result_score: Did they clearly share a outcome?
 
 Return ONLY valid JSON:
 {
@@ -360,12 +360,13 @@ Return ONLY valid JSON:
   "task_score": <integer 1-5>,
   "action_score": <integer 1-5>,
   "result_score": <integer 1-5>,
-  "feedback": "<2-3 sentences of specific coaching identifying the weakest components and how to improve>",
+  "feedback": "<Act as a career coach, give 2-3 sentences of advise in identifying the weaknesses and how to improve. 
+                make it sound like a real human by adding conversational transitions, mention personal effort, and acknowledge a specific technical detail or hurdle>",
   "example": {
-    "situation": "<1-2 sentences from candidate CV background if available>",
-    "task": "<1 sentence>",
-    "action": "<2-3 sentences of specific steps in plain English>",
-    "result": "<1-2 sentences with a concrete measure>"
+    "situation": "<1-2 sentences to set the scene by detailing the context, challenge, or problem faced from candidate CV background if available>",
+    "task": "<1-2 sentences to explain specific responsibility or the goal that needed to achieve in that scenario that are relevant to canditate CV background if available in plain English>",
+    "action": "<1-2 sentences to describe the steps took to address the challenge that are relative to canditate CV background if available in plain English>",
+    "result": "<1-2 sentences with quantifiable outcomes achieved and any key lessons you learned>"
   }
 }`;
   try {
