@@ -299,8 +299,8 @@ function renderPractice() {
     <div class="rec-row">
       <button class="mic${recording?' on':''}" id="mic" onclick="toggleRec()"><svg viewBox="0 0 24 24"><path d="${micPath}"/></svg></button>
       <div style="flex:1">
-        <textarea id="ans" style="min-height:80px" placeholder="Speak or type your answer here…" oninput="responses[currentQ].text=this.value;syncBtn()" ${analysed?'readonly':''}>${esc(r.text)}</textarea>
-        <div class="status"><div class="sdot${recording?' on':''}"></div><span>${recording?'Recording…':'Press mic or type'}</span></div>
+        <textarea id="ans" style="min-height:80px" placeholder="Speak or type your answer here…" oninput="responses[currentQ].text=this.value;syncBtn()" ${(analysed||recording)?'readonly':''}>${esc(r.text)}</textarea>
+        <div class="status"><div class="sdot${recording?' on':''}"></div><span>${recording?'Recording… tap mic to stop and edit':'Press mic or type'}</span></div>
       </div>
     </div>
     ${fbHtml}
