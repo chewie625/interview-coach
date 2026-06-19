@@ -367,7 +367,16 @@ async function startRec() {
     }
   };
 
-  dgSocket.onerror = () => { alert('Deepgram connection error. Check your API key and connection.'); stopRec(); };
+  dgSocket.onerror = (e) => {
+    console.error('[Deepgram] WebSocket error:', e);
+  };
+  dgSocket.onclose = (e) => {
+    console.error('[Deepgram] WebSocket closed. Code:', e.code, 'Reason:', e.reason, 'Clean:', e.wasClean);
+    if (recording && e.code !== 1000) {
+      alert(`Deepgram connection closed (code ${e.code}: ${e.reason || 'no reason given'}). Check browser console (F12) for details.`);
+      stopRec();
+    }
+  };
 
   recording = true;
   const micBtn = document.getElementById('mic');
