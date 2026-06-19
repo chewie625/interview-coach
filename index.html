@@ -46,6 +46,15 @@
     </div>
 
     <div class="field">
+      <label>Deepgram API key <span style="font-weight:400;color:#aaa;text-transform:none;letter-spacing:0">(for speech-to-text)</span></label>
+      <div style="display:flex;gap:8px">
+        <input type="password" id="dg-key" placeholder="Deepgram API key (from console.deepgram.com)">
+        <button class="btn btn-sm" onclick="toggleDgKey()">👁</button>
+      </div>
+      <div class="hint" style="margin-top:4px">Used for Nova-3 speech-to-text dictation. Get a key at <a href="https://console.deepgram.com" target="_blank">console.deepgram.com</a></div>
+    </div>
+
+    <div class="field">
       <label>Model <span id="model-load-status" style="font-weight:400;color:#aaa;text-transform:none;letter-spacing:0">— loading free models…</span></label>
       <select id="model"><option value="">Loading…</option></select>
       <div class="hint" style="margin-top:4px">Free models loaded live from OpenRouter. If one fails, pick another.</div>
@@ -163,6 +172,18 @@ document.getElementById('api-key').addEventListener('change', function() {
 // Auto-load saved key on startup
 const savedKey = localStorage.getItem('or_api_key');
 if (savedKey) { document.getElementById('api-key').value = savedKey; }
+
+// Deepgram key — save/load same way as OpenRouter key
+document.getElementById('dg-key').addEventListener('change', function() {
+  if (this.value.trim()) localStorage.setItem('dg_api_key', this.value.trim());
+});
+const savedDgKey = localStorage.getItem('dg_api_key');
+if (savedDgKey) { document.getElementById('dg-key').value = savedDgKey; }
+
+function toggleDgKey() {
+  const i = document.getElementById('dg-key');
+  i.type = i.type === 'password' ? 'text' : 'password';
+}
 
 // Toggle API key visibility
 function toggleKey() {
@@ -297,40 +318,72 @@ function syncBtn() {
 function goQ(i) { if (recording) stopRec(); currentQ = i; renderPractice(); }
 function clearQ() { if (recording) stopRec(); responses[currentQ] = {text:'',rating:null,feedback:''}; renderPractice(); }
 
-// Speech
+// Speech — Deepgram Nova-3 streaming
+let dgSocket = null, dgStream = null, dgRecorder = null;
+
 function toggleRec() { recording ? stopRec() : startRec(); }
-function startRec() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) { alert('Speech not supported. Use Chrome or type your answer.'); return; }
+
+async function startRec() {
+  const dgKey = document.getElementById('dg-key').value.trim();
+  if (!dgKey) { alert('Please enter your Deepgram API key in the Setup tab first.'); return; }
+
   // Snapshot the textarea at the moment mic is pressed — this is the base text
   const el = document.getElementById('ans');
   const baseText = el ? el.value : '';
   responses[currentQ].text = baseText;
 
-  recog = new SR(); recog.continuous = true; recog.interimResults = true; recog.lang = 'en-AU';
+  try {
+    dgStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch(e) {
+    alert('Microphone access denied or unavailable.');
+    return;
+  }
 
-  // Track only NEW speech from this session
+  dgSocket = new WebSocket(
+    'wss://api.deepgram.com/v1/listen?model=nova-3&punctuate=true&interim_results=true&language=en',
+    ['token', dgKey]
+  );
+
   let sessionFinal = '';
 
-  recog.onresult = e => {
-    let interim = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      if (e.results[i].isFinal) sessionFinal += e.results[i][0].transcript + ' ';
-      else interim = e.results[i][0].transcript;
-    }
-    const combined = baseText + sessionFinal + interim;
-    const el = document.getElementById('ans'); if (el) el.value = combined;
-    responses[currentQ].text = combined; syncBtn();
+  dgSocket.onopen = () => {
+    dgRecorder = new MediaRecorder(dgStream, { mimeType: 'audio/webm' });
+    dgRecorder.ondataavailable = e => {
+      if (e.data.size > 0 && dgSocket.readyState === WebSocket.OPEN) dgSocket.send(e.data);
+    };
+    dgRecorder.start(250);
   };
-  recog.onerror = e => { if (e.error==='not-allowed') alert('Microphone access denied.'); stopRec(); };
-  recog.onend = () => { if (recording) recog.start(); };
-  recog.start(); recording = true;
+
+  dgSocket.onmessage = msg => {
+    const data = JSON.parse(msg.data);
+    const alt = data.channel?.alternatives?.[0];
+    if (!alt) return;
+    if (data.is_final) {
+      sessionFinal += alt.transcript + ' ';
+      const el = document.getElementById('ans'); if (el) el.value = baseText + sessionFinal;
+      responses[currentQ].text = baseText + sessionFinal; syncBtn();
+    } else {
+      const el = document.getElementById('ans'); if (el) el.value = baseText + sessionFinal + alt.transcript;
+    }
+  };
+
+  dgSocket.onerror = () => { alert('Deepgram connection error. Check your API key and connection.'); stopRec(); };
+
+  recording = true;
   const micBtn = document.getElementById('mic');
   if (micBtn) { micBtn.classList.add('on'); micBtn.querySelector('path').setAttribute('d','M6 6l12 12M18 6L6 18'); }
   const sdot = document.querySelector('.sdot');
   if (sdot) { sdot.classList.add('on'); sdot.nextElementSibling.textContent = 'Recording…'; }
 }
-function stopRec() { recording = false; if (recog) { recog.onend=null; recog.stop(); recog=null; } renderPractice(); }
+
+function stopRec() {
+  recording = false;
+  if (dgRecorder && dgRecorder.state !== 'inactive') dgRecorder.stop();
+  if (dgStream) { dgStream.getTracks().forEach(t => t.stop()); dgStream = null; }
+  if (dgSocket) { dgSocket.close(); dgSocket = null; }
+  dgRecorder = null;
+  renderPractice();
+}
 
 // Analyse
 async function analyse() {
