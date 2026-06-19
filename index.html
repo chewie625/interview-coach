@@ -94,6 +94,7 @@ function goTab(n) {
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === n));
   document.querySelectorAll('.panel').forEach(x => x.classList.toggle('active', x.id === 'panel-' + n));
   if (n === 'results') renderResults();
+  if (n !== 'practice' && camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
 }
 
 // CV upload
@@ -294,6 +295,10 @@ function renderPractice() {
   const fbHtml = analysed ? `<div class="fb">${starHtml}<div class="fb-text">${esc(r.feedback)}</div>${exHtml}</div>` : '';
   document.getElementById('practice-area').innerHTML = `
     <div class="nav"><span style="font-size:13px;color:#888">Question ${currentQ+1} of ${questions.length}</span><div class="dots">${dots}</div></div>
+    <div class="cam-wrap">
+      <video id="cam-video" autoplay muted playsinline></video>
+      <button class="btn btn-sm cam-toggle" id="cam-toggle-btn" onclick="toggleCamera()">📷 Hide camera</button>
+    </div>
     <div class="q-card"><span class="tag">${esc(q.tag)}</span><p class="q-text">${esc(q.q)}</p><div class="tip">💡 <strong>STAR:</strong> Situation → Task → Action → Result</div></div>
     <label style="margin-bottom:6px">Your answer</label>
     <div class="rec-row">
@@ -305,6 +310,36 @@ function renderPractice() {
     </div>
     ${fbHtml}
     <div class="btns" id="brow">${btns}<span id="amsg"></span></div>`;
+  initCamera();
+}
+
+// Camera preview — local only, never recorded or sent anywhere
+let camStream = null, camOn = true;
+async function initCamera() {
+  if (!camOn) return;
+  const video = document.getElementById('cam-video');
+  if (!video) return;
+  try {
+    if (!camStream) camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+    video.srcObject = camStream;
+  } catch(e) {
+    const wrap = document.querySelector('.cam-wrap');
+    if (wrap) wrap.innerHTML = '<div class="cam-fallback">📷 Camera unavailable or permission denied</div>';
+  }
+}
+function toggleCamera() {
+  camOn = !camOn;
+  const video = document.getElementById('cam-video');
+  const btn = document.getElementById('cam-toggle-btn');
+  if (camOn) {
+    initCamera();
+    if (video) video.style.display = 'block';
+    if (btn) btn.textContent = '📷 Hide camera';
+  } else {
+    if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+    if (video) video.style.display = 'none';
+    if (btn) btn.textContent = '📷 Show camera';
+  }
 }
 
 function syncBtn() {
